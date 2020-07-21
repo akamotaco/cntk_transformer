@@ -1,3 +1,5 @@
+# http://jalammar.github.io/illustrated-transformer/
+# https://nlpinkorean.github.io/illustrated-transformer/
 import cntk as C
 
 CH_DIMS = 2
@@ -6,7 +8,7 @@ SA_DIMS = 3
 
 HEAD_DIMS = 8
 
-def self_attention_layer(in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='self_attention'):
+def self_attention_layer(in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='self_attention') -> C.Function:
     sq_sa_dims = C.Constant(C.sqrt(sa_dims).eval(), name='sq_dims')
 
     init = C.initializer.normal(1)
@@ -28,7 +30,7 @@ def self_attention_layer(in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name
 
     return C.as_block(result, [(X,X)], 'self_attention', 'self_attention_')
 
-def multi_headed_self_attention_layer(num_of_head:int, in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='multi_headed_self_attention', as_block:bool = False):
+def multi_headed_self_attention_layer(num_of_head:int, in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='multi_headed_self_attention', as_block:bool = False) -> C.Function:
     X = C.placeholder((in_ch, in_dims), name=name+'_ph')
     layers = []
     for i in range(num_of_head):
@@ -50,11 +52,11 @@ def multi_headed_self_attention_layer(num_of_head:int, in_dims:int, in_ch:int, o
 
     return result
 
-def layer_normalization(inputs:C.Function, name='layer_normalization'):
+def layer_normalization(inputs:C.Function, name='layer_normalization') -> C.Function:
     X = C.placeholder(inputs.shape, name=name+'_ph')
 
     mu = C.reduce_mean(X, name='mu')
-    sigma = C.sqrt(C.reduce_mean(C.square(X-mu)))
+    sigma = C.sqrt(C.reduce_mean(C.square(X-mu)), name='sigma')
 
     result = (X-mu)/sigma
 
@@ -62,7 +64,35 @@ def layer_normalization(inputs:C.Function, name='layer_normalization'):
 
     return block(inputs)
 
-    
+def feed_forward_layer(in_dims:int, ch_dims:int, out_dims:int, name='feed_forward', as_block:bool = False) -> C.Function:
+    X = C.placeholder((ch_dims, in_dims), name=name+'_ph')
+
+    ch_size = in_dims*ch_dims
+
+    ff = C.layers.Dense(ch_size, C.relu, name=name+'_l1')(X)
+    ff = C.layers.Dense(ch_size, name=name+'_l2')(ff)
+
+    result = C.reshape(ff, (ch_dims, in_dims), name=name+'_result')
+
+    if as_block:
+        return C.as_block(result, [(X,X)], name)
+    else:
+        return result
+
+def encoder(in_dims:int, ch_dims:int, out_dims:int, head_dims:int, sa_dims:int, name:str='encoder', as_block=False) -> C.Function:
+    X = C.placeholder((ch_dims, in_dims), name=name+'_ph')
+
+    mhsa_layer = multi_headed_self_attention_layer(head_dims, in_dims, ch_dims, out_dims, sa_dims)
+    ff_layer = feed_forward_layer(in_dims, ch_dims, out_dims)
+
+    sa = layer_normalization(X + mhsa_layer(X))
+    ff = layer_normalization(sa + ff_layer(sa))
+
+    result = ff
+    if as_block is True:
+        return C.as_block(result, [(X,X)], name)
+    else:
+        return result
 
 
 
@@ -82,10 +112,19 @@ mhsa_layer = multi_headed_self_attention_layer(HEAD_DIMS, IN_DIMS, CH_DIMS, OUT_
 model = mhsa_layer(X)
 print(model.eval({model.arguments[0]:v}))
 
+ff_layer = feed_forward_layer(IN_DIMS, CH_DIMS, OUT_DIMS)
 
-model = layer_normalization(X+mhsa_layer(X))
+
+sa = layer_normalization(X + mhsa_layer(X))
+ff = layer_normalization(sa + ff_layer(sa))
+
+model = ff
 print(model.eval({model.arguments[0]:v}))
 
+en_layer = encoder(IN_DIMS, CH_DIMS, OUT_DIMS, HEAD_DIMS, SA_DIMS)
+
+model = en_layer(X)
+print(model.eval({model.arguments[0]:v}))
 
 #region training test
 answer = C.input_variable((CH_DIMS, IN_DIMS))
