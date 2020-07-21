@@ -6,7 +6,7 @@ SA_DIMS = 3
 
 HEAD_DIMS = 8
 
-def self_attention(in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='self_attention'):
+def self_attention_layer(in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='self_attention'):
     sq_sa_dims = C.Constant(C.sqrt(sa_dims).eval(), name='sq_dims')
 
     init = C.initializer.normal(1)
@@ -28,11 +28,11 @@ def self_attention(in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='self
 
     return C.as_block(result, [(X,X)], 'self_attention', 'self_attention_')
 
-def multi_headed_self_attention(num_of_head:int, in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='multi_headed_self_attention', as_block:bool = False):
+def multi_headed_self_attention_layer(num_of_head:int, in_dims:int, in_ch:int, out_dims:int, sa_dims:int, name='multi_headed_self_attention', as_block:bool = False):
     X = C.placeholder((in_ch, in_dims), name=name+'_ph')
     layers = []
     for i in range(num_of_head):
-        layers.append(self_attention(IN_DIMS, CH_DIMS, OUT_DIMS, SA_DIMS, name=name+str(i)))
+        layers.append(self_attention_layer(IN_DIMS, CH_DIMS, OUT_DIMS, SA_DIMS, name=name+str(i)))
     outputs = []
     for layer in layers:
         outputs.append(layer(X))
@@ -50,18 +50,48 @@ def multi_headed_self_attention(num_of_head:int, in_dims:int, in_ch:int, out_dim
 
     return result
 
+def layer_normalization(inputs:C.Function, name='layer_normalization'):
+    X = C.placeholder(inputs.shape, name=name+'_ph')
+
+    mu = C.reduce_mean(X, name='mu')
+    sigma = C.sqrt(C.reduce_mean(C.square(X-mu)))
+
+    result = (X-mu)/sigma
+
+    block = C.as_block(result, [(X,X)], name)
+
+    return block(inputs)
+
+    
+
+
+
 from IPython import embed;embed()
 exit()
 
 import numpy as np
 
-v = np.ones((CH_DIMS, IN_DIMS))
+v = np.ones((CH_DIMS, IN_DIMS)).astype(np.float32)
 X = C.input_variable((CH_DIMS, IN_DIMS))
-sa_layer = self_attention(IN_DIMS, CH_DIMS, OUT_DIMS, SA_DIMS)
+sa_layer = self_attention_layer(IN_DIMS, CH_DIMS, OUT_DIMS, SA_DIMS)
 
 model = sa_layer(X)
 print(model.eval({model.arguments[0]:v}))
 
-mhsa_layer = multi_headed_self_attention(HEAD_DIMS, IN_DIMS, CH_DIMS, OUT_DIMS, SA_DIMS, as_block=True)
+mhsa_layer = multi_headed_self_attention_layer(HEAD_DIMS, IN_DIMS, CH_DIMS, OUT_DIMS, SA_DIMS, as_block=True)
 model = mhsa_layer(X)
 print(model.eval({model.arguments[0]:v}))
+
+
+model = layer_normalization(X+mhsa_layer(X))
+print(model.eval({model.arguments[0]:v}))
+
+
+#region training test
+answer = C.input_variable((CH_DIMS, IN_DIMS))
+
+loss = C.reduce_mean(C.square(model-answer))
+
+trainer = C.Trainer(model, (loss, None), C.adam(model.parameters, 0.001, 0.001))
+trainer.train_minibatch(dict(zip(loss.arguments,[v,v])))
+#endregion
