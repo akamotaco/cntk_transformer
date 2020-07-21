@@ -115,8 +115,16 @@ def positional_encoding(position, d_model):
   return pos_encoding
 #endregion
 
-from IPython import embed;embed()
+
+
+
+
+
+from IPython import embed;embed(header='end')
 exit()
+
+
+
 
 import numpy as np
 
@@ -140,7 +148,7 @@ ff = layer_normalization(sa + ff_layer(sa))
 model = ff
 print(model.eval({model.arguments[0]:v}))
 
-en_layer = encoder(IN_DIMS, SEQ_DIMS, OUT_DIMS, HEAD_DIMS, SA_DIMS)
+en_layer = encoder(IN_DIMS, SEQ_DIMS, OUT_DIMS, HEAD_DIMS, SA_DIMS, as_block=False)
 
 model = en_layer(X)
 print(model.eval({model.arguments[0]:v}))
