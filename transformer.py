@@ -2,40 +2,48 @@
 # https://nlpinkorean.github.io/illustrated-transformer/
 import cntk as C
 
-def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_block:bool = False) -> C.Function:
+def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False) -> C.Function:
     sq_sa_dims = C.Constant(C.sqrt(out_dims).eval(), name='sq_dims')
 
     init = C.initializer.normal(1)
 
     X = C.placeholder(in_dims, name=name+'_ph')
+    X_ = C.sequence.unpack(X, 0, True, name=name+'_unpack')
+
     W_Q = C.parameter((in_dims, out_dims), init=init, name=name+'_q')
-    W_K = C.parameter((in_dims, out_dims), init=init, name=name+'_k')
-    W_V = C.parameter((in_dims, out_dims), init=init, name=name+'_v')
+    q = X_@W_Q
 
-    q = X@W_Q
-    k = X@W_K
-    v = X@W_V
+    if k_ph:
+        k_init = C.placeholder((-3, in_dims), name=name+'_k_ph')
+        k = X_@k_init
+    else:
+        W_K = C.parameter((in_dims, out_dims), init=init, name=name+'_k')
+        k = X_@W_K
 
-    score = C.times_transpose(q, k, name=name+'_score')
-    div_k = score/sq_sa_dims
-    softmax = C.sequence.softmax(div_k, name=name+'_softmax')
-    softmax_value = C.element_times(softmax, v, name=name+'_softmax_value')
+    if v_ph:
+        v_init = C.placeholder((-3, in_dims), name=name+'_v_ph')
+        v = X_@v_init
+    else:
+        W_V = C.parameter((in_dims, out_dims), init=init, name=name+'_v')
+        v = X_@W_V
+    
+    scores = C.times_transpose(q, k, name=name+'_score_matrix')
+    div_k = scores/sq_sa_dims
+    softmax = C.softmax(div_k, name=name+'_softmax')
+    softmax_value = C.times(softmax, v, name=name+'_softmax_value')
 
-    result = softmax_value
+    result = C.to_sequence_like(softmax_value, X)
 
     if as_block:
-        return C.as_block(result, [(X,X)], 'self_attention', 'self_attention_'), (W_K, W_V)
+        return C.as_block(result, [(X,X)], 'self_attention', 'self_attention_')
     else:
-        return result, (W_K, W_V)
+        return result
 
-def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:int, name='multi_headed_self_attention', as_block:bool = False) -> C.Function:
+def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:int, name='multi_headed_self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False) -> C.Function:
     X = C.placeholder(in_dims, name=name+'_ph')
     layers = []
-    kvs = []
     for i in range(num_of_head):
-        l, kv = self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=True)
-        layers.append(l)
-        kvs.append(kv)
+        layers.append(self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=True))
     outputs = []
     for layer in layers:
         outputs.append(layer(X))
@@ -51,7 +59,7 @@ def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:
     if as_block is True:
         result = C.as_block(result, [(X,X)], 'multi_headed_self_attetion','multi_headed_self_attetion_')
 
-    return result, kvs
+    return result
 
 def layer_normalization(inputs:C.Function, name='layer_normalization') -> C.Function:
     X = C.placeholder(inputs.shape, name=name+'_ph')
@@ -82,20 +90,17 @@ def feed_forward_layer(in_dims:int, hidden_dims:int, name='feed_forward', as_blo
 def encoder(in_dims:int, sa_dims:int, head_dims:int, hidden_dims:int, name:str='encoder', as_block=False) -> C.Function:
     X = C.placeholder(in_dims, name=name+'_ph')
 
-    mhsa_layer, kvs = multi_headed_self_attention_layer(in_dims, sa_dims, head_dims)
+    mhsa_layer = multi_headed_self_attention_layer(in_dims, sa_dims, head_dims)
     ff_layer = feed_forward_layer(in_dims, hidden_dims)
 
     sa = layer_normalization(X + mhsa_layer(X))
     ff = layer_normalization(sa + ff_layer(sa))
 
-    ks = [kv[0] for kv in kvs]
-    vs = [kv[1] for kv in kvs]
-
     result = ff
     if as_block is True:
-        return C.as_block(result, [(X,X)], name), (ks, vs)
+        return C.as_block(result, [(X,X)], name)
     else:
-        return result, (ks, vs)
+        return result
 
 #region positional_encoding: https://github.com/jalammar/jalammar.github.io/blob/master/notebookes/transformer/transformer_positional_encoding_graph.ipynb
 def get_angles(pos, i, d_model):
@@ -132,15 +137,14 @@ if __name__ == '__main__':
 
     v = np.array([ [1,0,0,0], [1,1,1,1], [0,1,0,0] ], np.float32) # seq
     X = C.sequence.input_variable(IN_DIMS)
-    sa_layer, _ = self_attention_layer(IN_DIMS, SA_DIMS)
+    sa_layer = self_attention_layer(IN_DIMS, SA_DIMS)
 
     model = sa_layer(X)
     print(model.eval({model.arguments[0]:v}))
 
-    mhsa_layer, _ = multi_headed_self_attention_layer(IN_DIMS, SA_DIMS, HEAD_DIMS, as_block=False)
+    mhsa_layer = multi_headed_self_attention_layer(IN_DIMS, SA_DIMS, HEAD_DIMS, as_block=False)
     model = mhsa_layer(X)
     print(model.eval({model.arguments[0]:v}))
-
 
 
     ff_layer = feed_forward_layer(IN_DIMS, HIDDEN_DIMS)
@@ -152,7 +156,7 @@ if __name__ == '__main__':
     model = ff
     print(model.eval({model.arguments[0]:v}))
 
-    en_layer, kvs = encoder(IN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, as_block=False)
+    en_layer = encoder(IN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, as_block=False)
 
     model = en_layer(X)
     print(model.eval({model.arguments[0]:v}))
@@ -167,5 +171,7 @@ if __name__ == '__main__':
 
     trainer = C.Trainer(model, (loss, None), C.adam(model.parameters, 0.001, 0.001))
     # trainer.train_minibatch(dict(zip(loss.arguments,[v,a]))) # for self_attention
-    trainer.train_minibatch(dict(zip(loss.arguments,[v,v])))
+    print(trainer.train_minibatch(dict(zip(loss.arguments,[v,v]))))
     #endregion
+
+    from IPython import embed;embed()
