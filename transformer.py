@@ -8,45 +8,68 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
     init = C.initializer.normal(1)
 
     X = C.placeholder(in_dims, name=name+'_ph')
-    X_ = C.sequence.unpack(X, 0, True, name=name+'_unpack')
 
-    W_Q = C.parameter((in_dims, out_dims), init=init, name=name+'_q')
-    q = X_@W_Q
+    if k_ph is False and v_ph is False:
+        X_ = C.sequence.unpack(X, 0, True, name=name+'_unpack')
 
-    if k_ph:
-        k_init = C.placeholder((-3, in_dims), name=name+'_k_ph')
-        k = X_@k_init
-    else:
+        W_Q = C.parameter((in_dims, out_dims), init=init, name=name+'_q')
         W_K = C.parameter((in_dims, out_dims), init=init, name=name+'_k')
-        k = X_@W_K
-
-    if v_ph:
-        v_init = C.placeholder((-3, in_dims), name=name+'_v_ph')
-        v = X_@v_init
-    else:
         W_V = C.parameter((in_dims, out_dims), init=init, name=name+'_v')
+        q = X_@W_Q
+        k = X_@W_K # (in, out)
         v = X_@W_V
+        # from IPython import embed;embed(header='normal')
+        # exit()
+    elif k_ph is True and v_ph is True: # ???? test
+        k_ = C.placeholder((in_dims, -3), name=name+'_k_ph')
+        v_ = C.placeholder((in_dims, -3), name=name+'_v_ph')
+        q = X@C.ones_like(k_) # ??????? X 와 Q, KV를 맞추는 방법은?
+        k = X@k_
+        v = X@v_
+    else:
+        raise Exception(f'k_ph:{k_ph}, v_ph:{v_ph}')
     
     scores = C.times_transpose(q, k, name=name+'_score_matrix')
     div_k = scores/sq_sa_dims
     softmax = C.softmax(div_k, name=name+'_softmax')
     softmax_value = C.times(softmax, v, name=name+'_softmax_value')
 
-    result = C.to_sequence_like(softmax_value, X)
+    
+    if k_ph is False and v_ph is False:
+        result = C.to_sequence_like(softmax_value, X)
+    else:
+        result = softmax_value # ????? seq 없음?
 
     if as_block:
-        return C.as_block(result, [(X,X)], 'self_attention', 'self_attention_')
+        if k_ph is False and v_ph is False:
+            return C.as_block(result, [(X,X)], 'self_attention', 'self_attention_')
+        elif k_ph is True and v_ph is True:
+            return C.as_block(result, [(X,X), (k_,k_), (v_,v_)], 'self_attention', 'self_attention_')
+        else:
+            raise Exception(f'k_ph:{k_ph} v_ph:{v_ph}')
     else:
         return result
 
 def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:int, name='multi_headed_self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False) -> C.Function:
     X = C.placeholder(in_dims, name=name+'_ph')
+
     layers = []
-    for i in range(num_of_head):
-        layers.append(self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=True))
     outputs = []
-    for layer in layers:
-        outputs.append(layer(X))
+
+    if k_ph is False and v_ph is False:
+        for i in range(num_of_head):
+            layers.append(self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=True))
+        for layer in layers:
+            outputs.append(layer(X))
+    elif k_ph is True and v_ph is True:
+        k_ = C.placeholder((-3, in_dims), name=name+'_k_ph') # -3: sequence axis
+        v_ = C.placeholder((-3, in_dims), name=name+'_v_ph')
+        for i in range(num_of_head):
+            layers.append(self_attention_layer(in_dims, in_dims, name=name+str(i), as_block=True, k_ph=k_ph, v_ph=v_ph))
+        for layer in layers:
+            outputs.append(layer(X, k_, v_))
+    else:
+        raise Exception(f'k_ph:{k_ph}, v_ph:{v_ph}')
     
     concat = C.splice(*outputs, name='concat')
 
@@ -57,7 +80,12 @@ def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:
     result = C.times_transpose(concat, W_O, name='result')
 
     if as_block is True:
-        result = C.as_block(result, [(X,X)], 'multi_headed_self_attetion','multi_headed_self_attetion_')
+        if k_ph is False and v_ph is False:
+            result = C.as_block(result, [(X,X)], 'multi_headed_self_attetion','multi_headed_self_attetion_')
+        elif k_ph is True and v_ph is True:
+            result = C.as_block(result, [(X,X), (k_,k_), (v_,v_)], 'multi_headed_self_attetion','multi_headed_self_attetion_')
+        else:
+            raise Exception(f'k_ph:{k_ph} v_ph:{v_ph}')
 
     return result
 
@@ -136,7 +164,7 @@ if __name__ == '__main__':
     import numpy as np
 
     v = np.array([ [1,0,0,0], [1,1,1,1], [0,1,0,0] ], np.float32) # seq
-    X = C.sequence.input_variable(IN_DIMS)
+    X = C.sequence.input_variable(IN_DIMS, name='encoder_input')
     sa_layer = self_attention_layer(IN_DIMS, SA_DIMS)
 
     model = sa_layer(X)
@@ -160,6 +188,23 @@ if __name__ == '__main__':
 
     model = en_layer(X)
     print(model.eval({model.arguments[0]:v}))
+
+#################################################
+
+    encoder = model
+
+    # OUT_DIMS = 5
+
+    # y = np.array(range(15),np.float32).reshape(-1,OUT_DIMS)
+    Y = C.input_variable(IN_DIMS, name='decoder_input') # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
+
+    # edal_layer = multi_headed_self_attention_layer(IN_DIMS, IN_DIMS, HEAD_DIMS, as_block=False, k_ph=True, v_ph=True)
+    edal_layer = self_attention_layer(IN_DIMS, IN_DIMS, k_ph=True, v_ph=True)
+    kv_memory = C.transpose(C.sequence.unpack(encoder.output, 0, True), (1,0))
+    m = edal_layer(Y, kv_memory, kv_memory)
+    print(m.eval({X:v.reshape(1,3,4), Y:v[0].reshape(1,4)}))
+
+
 
     #region training test
     # a = np.array([ [1,0,1], [0,0,0], [1,1,1]], np.float32) # for self_attention
