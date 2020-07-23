@@ -13,7 +13,7 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
         q = C.layers.Dense(out_dims, name=name+'_q')(X) # W_Q = C.parameter((in_dims, out_dims), init=init, name=name+'_q')
         k = C.layers.Dense(out_dims, name=name+'_k')(X) # W_K = C.parameter((in_dims, out_dims), init=init, name=name+'_k')
         v = C.layers.Dense(out_dims, name=name+'_v')(X) # W_V = C.parameter((in_dims, out_dims), init=init, name=name+'_v')
-    elif k_ph is True and v_ph is True: # ???? test
+    elif k_ph is True and v_ph is True:
         q = C.layers.Dense(out_dims, name=name+'_q')(X)
         k = C.placeholder(out_dims, name=name+'_k_ph')
         v = C.placeholder(out_dims, name=name+'_v_ph')
@@ -230,4 +230,26 @@ if __name__ == '__main__':
     # print(trainer.train_minibatch(dict(zip(loss.arguments,[v,v]))))
     # #endregion
 
-    # from IPython import embed;embed(header='end')
+#region seq-mask test
+    q1 = C.sequence.input_variable(5)
+    a1 = np.array(range(4*5),np.float32).reshape(1,-1,5)
+    r1 = q1*2
+    print('================================')
+    print(r1.eval({q1:a1}))
+    print(C.sequence.is_first(r1).eval({q1:a1}))
+    print(C.layers.Fold(C.plus)(r1).eval({q1:a1}))
+#endregion
+
+#region suq-mask test2
+    x = [[[0],[0],[0]],
+         [[0],[0],[0],[0],[0]]]
+    @C.Function
+    def double_up(s):
+        return s*2
+    r1 = C.layers.UnfoldFrom(double_up)(C.Constant(1), C.sequence.input_variable(1))
+    r2 = C.layers.UnfoldFrom(lambda x: x*2)(C.Constant(1), C.sequence.input_variable(1))
+    print(r1.eval({r1.arguments[0]:x}))
+    print(r2.eval({r2.arguments[0]:x}))
+#endregion
+
+    from IPython import embed;embed(header='end')
