@@ -80,21 +80,18 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
 def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:int, name='multi_headed_self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False, mask_opt:bool=False) -> C.Function:
     X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
-    layers = []
     outputs = []
 
     if k_ph is False and v_ph is False:
         for i in range(num_of_head):
-            layers.append(self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=not as_block, mask_opt=mask_opt))
-        for layer in layers:
-            outputs.append(layer.replace_placeholders({layer.placeholders[0]:X}))
+            layer = self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=not as_block, mask_opt=mask_opt)
+            outputs.append(layer(X))
     elif k_ph is True and v_ph is True:
         k_ = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis('kv_seq')), name=name+'_k_ph') # -3: sequence axis
         v_ = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis('kv_seq')), name=name+'_v_ph')
         for i in range(num_of_head):
-            layers.append(self_attention_layer(in_dims, in_dims, name=name+str(i), as_block=not as_block, k_ph=k_ph, v_ph=v_ph))
-        for layer in layers:
-            outputs.append(layer.replace_placeholders(dict(zip(layer.placeholders,[X,k_,v_]))))
+            layer = self_attention_layer(in_dims, in_dims, name=name+str(i), as_block=not as_block, k_ph=k_ph, v_ph=v_ph)
+            outputs.append(layer(X,k_,v_))
     else:
         raise Exception(f'k_ph:{k_ph}, v_ph:{v_ph}')
     
