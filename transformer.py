@@ -2,10 +2,41 @@
 # https://nlpinkorean.github.io/illustrated-transformer/
 import cntk as C
 
-def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False) -> C.Function:
-    sq_sa_dims = C.Constant(C.sqrt(out_dims).eval(), name='sq_dims')
+def triangular_matrix(mode:int = 1):
+    X = C.placeholder(1)
+    ones = C.ones_like(X[0])
+    perm_1 = C.layers.Recurrence(C.plus, return_full_state=True)(ones)
+    perm_2 = C.layers.Recurrence(C.plus, go_backwards=True, return_full_state=True)(ones)
 
-    # init = C.initializer.normal(1)
+    arr_1 = C.sequence.unpack(perm_1,0,True)
+    arr_2 = C.sequence.unpack(perm_2,0,True)
+
+    mat = C.times_transpose(arr_1, arr_2)
+    mat_c = perm_1*perm_2
+
+    mat_seq = C.to_sequence_like(mat, mat_c)
+    diagonal_seq = mat_seq - mat_c
+
+    diagonal_mat = C.sequence.unpack(diagonal_seq,0,True)
+
+    final_mat = diagonal_mat
+    if mode == 0:
+        final_mat = C.equal(final_mat, 0)
+    elif mode == 1:
+        final_mat = C.less_equal(final_mat, 0)
+    elif mode == 2:
+        final_mat = C.less(final_mat, 0)
+    elif mode == -1:
+        final_mat = C.greater_equal(final_mat, 0)
+    elif mode == -2:
+        final_mat = C.greater(final_mat, 0)
+
+    result = C.as_block(final_mat, [(X,X)], 'triangular_matrix')
+
+    return result
+
+def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False, mask_opt:bool=False) -> C.Function:
+    sq_sa_dims = C.Constant(C.sqrt(out_dims).eval(), name='sq_dims')
 
     X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
@@ -25,11 +56,13 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
     v_ = C.sequence.unpack(v, 0, True, name=name+'_unpack_v')
     
     scores = C.times_transpose(q_, k_, name=name+'_score_matrix')
-    div_k = scores/sq_sa_dims
+    scaled = scores/sq_sa_dims # div_k
 
-    # mask ???
+    if mask_opt:
+        mask = triangular_matrix(2)(X)
+        scaled = mask * scaled
 
-    softmax = C.softmax(div_k, name=name+'_softmax')
+    softmax = C.softmax(scaled, name=name+'_softmax')
     softmax_value = C.times(softmax, v_, name=name+'_softmax_value')
 
     result = C.to_sequence_like(softmax_value, X)
@@ -44,7 +77,7 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
     else:
         return result
 
-def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:int, name='multi_headed_self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False) -> C.Function:
+def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:int, name='multi_headed_self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False, mask_opt:bool=False) -> C.Function:
     X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
     layers = []
@@ -52,7 +85,7 @@ def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:
 
     if k_ph is False and v_ph is False:
         for i in range(num_of_head):
-            layers.append(self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=True))
+            layers.append(self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=True, mask_opt=mask_opt))
         for layer in layers:
             outputs.append(layer.replace_placeholders({layer.placeholders[0]:X}))
     elif k_ph is True and v_ph is True:
@@ -128,9 +161,9 @@ def decoder(in_dims:int, sa_dims:int, head_dims:int, hidden_dims:int, kv_memory,
     X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()),name=name+'_ph')
     k_memory = C.placeholder(in_dims, (C.Axis.default_batch_axis(),C.Axis('kv_seq')), name=name+'_k_memory')
     v_memory = C.placeholder(in_dims, (C.Axis.default_batch_axis(),C.Axis('kv_seq')), name=name+'_v_memory')
-    # placeholder 는 clone이 안되서 k, v를 kv로 placeholder로서 묶으면 안됨
+    # placeholder 는 clone이 안되서 k, v를 kv로 하나의 placeholder로서 묶으면 안됨
 
-    mhsa_layer = multi_headed_self_attention_layer(in_dims, sa_dims, head_dims)
+    mhsa_layer = multi_headed_self_attention_layer(in_dims, sa_dims, head_dims, mask_opt=True)
     eda_layer = multi_headed_self_attention_layer(in_dims, sa_dims, head_dims, k_ph=True, v_ph=True)
     ff_layer = feed_forward_layer(in_dims, hidden_dims)
 
@@ -291,3 +324,36 @@ if __name__ == '__main__':
 #endregion
 
     from IPython import embed;embed(header='end')
+
+
+
+
+# z = np.arange(5*5).reshape(5,5)
+
+# q = C.sequence.input_variable(5)
+# w = C.ones_like(q[0])
+
+# e = C.layers.Recurrence(C.plus, return_full_state=True)(w)
+# e_ = C.layers.Recurrence(C.plus, go_backwards=True, return_full_state=True)(w)
+
+# r = C.sequence.unpack(e,0,True)
+# r_ = C.sequence.unpack(e_,0,True)
+
+# R = C.times_transpose(r,r_)
+# R_c = e*e_
+
+# R_seq = C.to_sequence_like(R,R_c)
+# R_mat = R_seq - R_c
+
+# M = C.reduce_max(R)
+
+# mat = (R-1)/(M-1)
+
+
+# mat3 = C.to_sequence(mat)
+
+# mat2 = C.greater_equal(mat, C.Constant(1.0/3+1e-5))
+
+
+# m = w
+# m.eval({q:z})
