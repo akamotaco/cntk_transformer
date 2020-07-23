@@ -140,7 +140,7 @@ def decoder(in_dims:int, sa_dims:int, head_dims:int, hidden_dims:int, kv_memory,
 
     result = ff
     if as_block is True:
-        return C.as_block(result, [(X,X), (kv_memory,kv_memory)], name)
+        return C.as_block(result, [(X,X), (k_memory,k_memory), (v_memory,v_memory)], name)
     else:
         return result
 
@@ -184,7 +184,7 @@ if __name__ == '__main__':
     model = sa_layer(X)
     print(model.eval({model.arguments[0]:v}))
 
-    mhsa_layer = multi_headed_self_attention_layer(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, as_block=False)
+    mhsa_layer = multi_headed_self_attention_layer(TOKEN_DIMS, SA_DIMS, HEAD_DIMS)
     model = mhsa_layer(X)
     print(model.eval({model.arguments[0]:v}))
 
@@ -242,7 +242,7 @@ if __name__ == '__main__':
 
 
 
-    de_layer = decoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, encoder)
+    de_layer = decoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, encoder, as_block=False)
     model = de_layer(Y, encoder, encoder)
     print(model.eval({X:v, Y:y}))
     decoder = model
