@@ -7,7 +7,7 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
 
     # init = C.initializer.normal(1)
 
-    X = C.placeholder(in_dims, name=name+'_ph')
+    X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
     if k_ph is False and v_ph is False:
         q = C.layers.Dense(out_dims, name=name+'_q')(X) # W_Q = C.parameter((in_dims, out_dims), init=init, name=name+'_q')
@@ -15,8 +15,8 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
         v = C.layers.Dense(out_dims, name=name+'_v')(X) # W_V = C.parameter((in_dims, out_dims), init=init, name=name+'_v')
     elif k_ph is True and v_ph is True:
         q = C.layers.Dense(out_dims, name=name+'_q')(X)
-        k = C.placeholder(out_dims, name=name+'_k_ph')
-        v = C.placeholder(out_dims, name=name+'_v_ph')
+        k = C.placeholder(out_dims, (C.Axis.default_batch_axis(), C.Axis('kv_seq')), name=name+'_k_ph')
+        v = C.placeholder(out_dims, (C.Axis.default_batch_axis(), C.Axis('kv_seq')), name=name+'_v_ph')
     else:
         raise Exception(f'k_ph:{k_ph}, v_ph:{v_ph}')
 
@@ -26,6 +26,9 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
     
     scores = C.times_transpose(q_, k_, name=name+'_score_matrix')
     div_k = scores/sq_sa_dims
+
+    # mask ???
+
     softmax = C.softmax(div_k, name=name+'_softmax')
     softmax_value = C.times(softmax, v_, name=name+'_softmax_value')
 
@@ -42,7 +45,7 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
         return result
 
 def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:int, name='multi_headed_self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False) -> C.Function:
-    X = C.placeholder(in_dims, name=name+'_ph')
+    X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
     layers = []
     outputs = []
@@ -51,14 +54,14 @@ def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:
         for i in range(num_of_head):
             layers.append(self_attention_layer(in_dims, hidden_dims, name=name+str(i), as_block=True))
         for layer in layers:
-            outputs.append(layer(X))
+            outputs.append(layer.replace_placeholders({layer.placeholders[0]:X}))
     elif k_ph is True and v_ph is True:
-        k_ = C.placeholder(in_dims, name=name+'_k_ph') # -3: sequence axis
-        v_ = C.placeholder(in_dims, name=name+'_v_ph')
+        k_ = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis('kv_seq')), name=name+'_k_ph') # -3: sequence axis
+        v_ = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis('kv_seq')), name=name+'_v_ph')
         for i in range(num_of_head):
             layers.append(self_attention_layer(in_dims, in_dims, name=name+str(i), as_block=True, k_ph=k_ph, v_ph=v_ph))
         for layer in layers:
-            outputs.append(layer(X, k_, v_))
+            outputs.append(layer.replace_placeholders(dict(zip(layer.placeholders,[X,k_,v_]))))
     else:
         raise Exception(f'k_ph:{k_ph}, v_ph:{v_ph}')
     
@@ -81,7 +84,7 @@ def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:
     return result
 
 def layer_normalization(inputs:C.Function, name='layer_normalization') -> C.Function:
-    X = C.placeholder(inputs.shape, name=name+'_ph')
+    X = C.placeholder(inputs.shape, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
     mu = C.reduce_mean(X, name='mu')
     sigma = C.sqrt(C.reduce_mean(C.square(X-mu)), name='sigma')
@@ -93,7 +96,7 @@ def layer_normalization(inputs:C.Function, name='layer_normalization') -> C.Func
     return block(inputs)
 
 def feed_forward_layer(in_dims:int, hidden_dims:int, name='feed_forward', as_block:bool = False) -> C.Function:
-    X = C.placeholder(in_dims, name=name+'_ph')
+    X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
     ff = C.layers.Dense(hidden_dims, C.relu, name=name+'_l1')(X)
     ff = C.layers.Dense(in_dims, name=name+'_l2')(ff)
@@ -107,7 +110,7 @@ def feed_forward_layer(in_dims:int, hidden_dims:int, name='feed_forward', as_blo
         return result
 
 def encoder(in_dims:int, sa_dims:int, head_dims:int, hidden_dims:int, name:str='encoder', as_block=False) -> C.Function:
-    X = C.placeholder(in_dims, name=name+'_ph')
+    X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
     mhsa_layer = multi_headed_self_attention_layer(in_dims, sa_dims, head_dims)
     ff_layer = feed_forward_layer(in_dims, hidden_dims)
@@ -120,6 +123,27 @@ def encoder(in_dims:int, sa_dims:int, head_dims:int, hidden_dims:int, name:str='
         return C.as_block(result, [(X,X)], name)
     else:
         return result
+
+def decoder(in_dims:int, sa_dims:int, head_dims:int, hidden_dims:int, kv_memory, name:str='decoder', as_block:bool = False) -> C.Function:
+    X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()),name=name+'_ph')
+    k_memory = C.placeholder(in_dims, (C.Axis.default_batch_axis(),C.Axis('kv_seq')), name=name+'_k_memory')
+    v_memory = C.placeholder(in_dims, (C.Axis.default_batch_axis(),C.Axis('kv_seq')), name=name+'_v_memory')
+    # placeholder 는 clone이 안되서 k, v를 kv로 placeholder로서 묶으면 안됨
+
+    mhsa_layer = multi_headed_self_attention_layer(in_dims, sa_dims, head_dims)
+    eda_layer = multi_headed_self_attention_layer(in_dims, sa_dims, head_dims, k_ph=True, v_ph=True)
+    ff_layer = feed_forward_layer(in_dims, hidden_dims)
+
+    sa = layer_normalization(X + mhsa_layer(X)) # w/o mask
+    eda = layer_normalization(sa + eda_layer(sa, k_memory, v_memory))
+    ff = layer_normalization(eda + ff_layer(eda))
+
+    result = ff
+    if as_block is True:
+        return C.as_block(result, [(X,X), (kv_memory,kv_memory)], name)
+    else:
+        return result
+
 
 #region positional_encoding: https://github.com/jalammar/jalammar.github.io/blob/master/notebookes/transformer/transformer_positional_encoding_graph.ipynb
 def get_angles(pos, i, d_model):
@@ -150,7 +174,6 @@ if __name__ == '__main__':
     SA_DIMS = 3 # size of self attention
     HEAD_DIMS = 8 # size of multi-headed self attention
     HIDDEN_DIMS = 24
-
 
     import numpy as np
 
@@ -208,27 +231,42 @@ if __name__ == '__main__':
     y = np.array(range(TOKEN_DIMS*input_size),np.float32).reshape(input_size,TOKEN_DIMS)
     Y = C.sequence.input_variable(TOKEN_DIMS, name='decoder_input', sequence_axis=C.Axis('decoder_seq')) # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
 
-    edal_layer = self_attention_layer(TOKEN_DIMS, TOKEN_DIMS, k_ph=True, v_ph=True)
+    edal_layer = self_attention_layer(TOKEN_DIMS, TOKEN_DIMS, k_ph=True, v_ph=True, as_block=True)
     m = edal_layer(Y, encoder.output, encoder.output)
     print(m.eval({X:v.reshape(1,3,4), Y:y.reshape(1,input_size,4)}))
 
-    msedal_layer = multi_headed_self_attention_layer(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, k_ph=True, v_ph=True)
+    msedal_layer = multi_headed_self_attention_layer(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, k_ph=True, v_ph=True, as_block=True)
     m = msedal_layer(Y, encoder.output, encoder.output)
     print(m.eval({X:v, Y:y}))
 
 
-    # #region training test
-    # # a = np.array([ [1,0,1], [0,0,0], [1,1,1]], np.float32) # for self_attention
-    # # answer_for_test = C.sequence.input_variable(OUT_DIMS) # for self_attentio
 
-    # answer_for_test = C.sequence.input_variable(TOKEN_DIMS) # else
 
-    # loss = C.reduce_mean(C.square(model-answer_for_test))
+    de_layer = decoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, encoder)
+    model = de_layer(Y, encoder, encoder)
+    print(model.eval({X:v, Y:y}))
+    decoder = model
 
-    # trainer = C.Trainer(model, (loss, None), C.adam(model.parameters, 0.001, 0.001))
-    # # trainer.train_minibatch(dict(zip(loss.arguments,[v,a]))) # for self_attention
-    # print(trainer.train_minibatch(dict(zip(loss.arguments,[v,v]))))
-    # #endregion
+
+    #region training test
+    # a = np.array([ [1,0,1], [0,0,0], [1,1,1]], np.float32) # for self_attention
+    # answer_for_test = C.sequence.input_variable(OUT_DIMS) # for self_attentio
+
+    answer_for_test = C.sequence.input_variable(TOKEN_DIMS, sequence_axis=C.Axis('encoder_seq')) # else
+
+    loss = C.reduce_mean(C.square(encoder-answer_for_test))
+
+    trainer = C.Trainer(encoder, (loss, None), C.adam(encoder.parameters, 0.001, 0.001))
+    print(trainer.train_minibatch(dict(zip(loss.arguments,[v,v]))))
+    #endregion
+
+
+    answer_for_test = C.sequence.input_variable(TOKEN_DIMS, sequence_axis=C.Axis('decoder_seq'))
+
+    loss = C.reduce_mean(C.square(decoder-answer_for_test))
+
+    trainer = C.Trainer(decoder, (loss, None), C.adam(decoder.parameters, 0.001, 0.001))
+    print(trainer.train_minibatch(dict(zip(loss.arguments,[y,v,y]))))
 
 #region seq-mask test
     q1 = C.sequence.input_variable(5)
