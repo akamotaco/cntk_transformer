@@ -5,21 +5,14 @@ import cntk as C
 def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False) -> C.Function:
     sq_sa_dims = C.Constant(C.sqrt(out_dims).eval(), name='sq_dims')
 
-    init = C.initializer.normal(1)
+    # init = C.initializer.normal(1)
 
     X = C.placeholder(in_dims, name=name+'_ph')
 
     if k_ph is False and v_ph is False:
-        X_ = C.sequence.unpack(X, 0, True, name=name+'_unpack')
-
-        W_Q = C.parameter((in_dims, out_dims), init=init, name=name+'_q')
-        W_K = C.parameter((in_dims, out_dims), init=init, name=name+'_k')
-        W_V = C.parameter((in_dims, out_dims), init=init, name=name+'_v')
-        q = X_@W_Q
-        k = X_@W_K # (in, out)
-        v = X_@W_V
-        # from IPython import embed;embed(header='normal')
-        # exit()
+        q = C.layers.Dense(out_dims, name=name+'_q')(X) # W_Q = C.parameter((in_dims, out_dims), init=init, name=name+'_q')
+        k = C.layers.Dense(out_dims, name=name+'_k')(X) # W_K = C.parameter((in_dims, out_dims), init=init, name=name+'_k')
+        v = C.layers.Dense(out_dims, name=name+'_v')(X) # W_V = C.parameter((in_dims, out_dims), init=init, name=name+'_v')
     elif k_ph is True and v_ph is True: # ???? test
         k_ = C.placeholder((in_dims, -3), name=name+'_k_ph')
         v_ = C.placeholder((in_dims, -3), name=name+'_v_ph')
@@ -28,18 +21,18 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
         v = X@v_
     else:
         raise Exception(f'k_ph:{k_ph}, v_ph:{v_ph}')
+
+    q_ = C.sequence.unpack(q, 0, True, name=name+'_unpack_q')
+    k_ = C.sequence.unpack(k, 0, True, name=name+'_unpack_k')
+    v_ = C.sequence.unpack(v, 0, True, name=name+'_unpack_v')
     
-    scores = C.times_transpose(q, k, name=name+'_score_matrix')
+    scores = C.times_transpose(q_, k_, name=name+'_score_matrix')
     div_k = scores/sq_sa_dims
     softmax = C.softmax(div_k, name=name+'_softmax')
-    softmax_value = C.times(softmax, v, name=name+'_softmax_value')
+    softmax_value = C.times(softmax, v_, name=name+'_softmax_value')
 
+    result = C.to_sequence_like(softmax_value, X)
     
-    if k_ph is False and v_ph is False:
-        result = C.to_sequence_like(softmax_value, X)
-    else:
-        result = softmax_value # ????? seq 없음?
-
     if as_block:
         if k_ph is False and v_ph is False:
             return C.as_block(result, [(X,X)], 'self_attention', 'self_attention_')
@@ -73,11 +66,11 @@ def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:
     
     concat = C.splice(*outputs, name='concat')
 
-    init = C.initializer.normal(1)
+    result = C.layers.Dense(in_dims, name='W_o')(concat)
 
-    W_O = C.parameter((in_dims, hidden_dims*num_of_head), init=init, name=name+'_Wo')
-
-    result = C.times_transpose(concat, W_O, name='result')
+    # init = C.initializer.normal(1)
+    # W_O = C.parameter((in_dims, hidden_dims*num_of_head), init=init, name=name+'_Wo')
+    # result = C.times_transpose(concat, W_O, name='result')
 
     if as_block is True:
         if k_ph is False and v_ph is False:
@@ -193,16 +186,16 @@ if __name__ == '__main__':
 
     encoder = model
 
-    # OUT_DIMS = 5
+    # # OUT_DIMS = 5
 
-    # y = np.array(range(15),np.float32).reshape(-1,OUT_DIMS)
-    Y = C.input_variable(IN_DIMS, name='decoder_input') # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
+    # # y = np.array(range(15),np.float32).reshape(-1,OUT_DIMS)
+    # Y = C.input_variable(IN_DIMS, name='decoder_input') # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
 
-    # edal_layer = multi_headed_self_attention_layer(IN_DIMS, IN_DIMS, HEAD_DIMS, as_block=False, k_ph=True, v_ph=True)
-    edal_layer = self_attention_layer(IN_DIMS, IN_DIMS, k_ph=True, v_ph=True)
-    kv_memory = C.transpose(C.sequence.unpack(encoder.output, 0, True), (1,0))
-    m = edal_layer(Y, kv_memory, kv_memory)
-    print(m.eval({X:v.reshape(1,3,4), Y:v[0].reshape(1,4)}))
+    # # edal_layer = multi_headed_self_attention_layer(IN_DIMS, IN_DIMS, HEAD_DIMS, as_block=False, k_ph=True, v_ph=True)
+    # edal_layer = self_attention_layer(IN_DIMS, IN_DIMS, k_ph=True, v_ph=True)
+    # kv_memory = C.transpose(C.sequence.unpack(encoder.output, 0, True), (1,0))
+    # m = edal_layer(Y, kv_memory, kv_memory)
+    # print(m.eval({X:v.reshape(1,3,4), Y:v[0].reshape(1,4)}))
 
 
 
@@ -219,4 +212,4 @@ if __name__ == '__main__':
     print(trainer.train_minibatch(dict(zip(loss.arguments,[v,v]))))
     #endregion
 
-    from IPython import embed;embed()
+    from IPython import embed;embed(header='end')
