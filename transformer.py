@@ -14,11 +14,9 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
         k = C.layers.Dense(out_dims, name=name+'_k')(X) # W_K = C.parameter((in_dims, out_dims), init=init, name=name+'_k')
         v = C.layers.Dense(out_dims, name=name+'_v')(X) # W_V = C.parameter((in_dims, out_dims), init=init, name=name+'_v')
     elif k_ph is True and v_ph is True: # ???? test
-        k_ = C.placeholder((in_dims, -3), name=name+'_k_ph')
-        v_ = C.placeholder((in_dims, -3), name=name+'_v_ph')
-        q = X@C.ones_like(k_) # ??????? X 와 Q, KV를 맞추는 방법은?
-        k = X@k_
-        v = X@v_
+        q = C.layers.Dense(out_dims, name=name+'_q')(X)
+        k = C.placeholder(out_dims, name=name+'_k_ph')
+        v = C.placeholder(out_dims, name=name+'_v_ph')
     else:
         raise Exception(f'k_ph:{k_ph}, v_ph:{v_ph}')
 
@@ -37,7 +35,7 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
         if k_ph is False and v_ph is False:
             return C.as_block(result, [(X,X)], 'self_attention', 'self_attention_')
         elif k_ph is True and v_ph is True:
-            return C.as_block(result, [(X,X), (k_,k_), (v_,v_)], 'self_attention', 'self_attention_')
+            return C.as_block(result, [(X,X), (k,k), (v,v)], 'self_attention', 'self_attention_')
         else:
             raise Exception(f'k_ph:{k_ph} v_ph:{v_ph}')
     else:
@@ -186,16 +184,16 @@ if __name__ == '__main__':
 
     encoder = model
 
-    # # OUT_DIMS = 5
+    OUT_DIMS = 5
 
-    # # y = np.array(range(15),np.float32).reshape(-1,OUT_DIMS)
-    # Y = C.input_variable(IN_DIMS, name='decoder_input') # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
+    # y = np.array(range(15),np.float32).reshape(3,OUT_DIMS)
+    input_size = v.shape[0]
+    y = np.array(range(OUT_DIMS*input_size),np.float32).reshape(input_size,OUT_DIMS)
+    Y = C.sequence.input_variable(OUT_DIMS, name='decoder_input') # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
 
-    # # edal_layer = multi_headed_self_attention_layer(IN_DIMS, IN_DIMS, HEAD_DIMS, as_block=False, k_ph=True, v_ph=True)
-    # edal_layer = self_attention_layer(IN_DIMS, IN_DIMS, k_ph=True, v_ph=True)
-    # kv_memory = C.transpose(C.sequence.unpack(encoder.output, 0, True), (1,0))
-    # m = edal_layer(Y, kv_memory, kv_memory)
-    # print(m.eval({X:v.reshape(1,3,4), Y:v[0].reshape(1,4)}))
+    edal_layer = self_attention_layer(OUT_DIMS, IN_DIMS, k_ph=True, v_ph=True)
+    m = edal_layer(Y, encoder.output, encoder.output)
+    print(m.eval({X:v, Y:y}))
 
 
 
