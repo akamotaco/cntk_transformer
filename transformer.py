@@ -53,8 +53,8 @@ def multi_headed_self_attention_layer(in_dims:int, hidden_dims:int, num_of_head:
         for layer in layers:
             outputs.append(layer(X))
     elif k_ph is True and v_ph is True:
-        k_ = C.placeholder((-3, in_dims), name=name+'_k_ph') # -3: sequence axis
-        v_ = C.placeholder((-3, in_dims), name=name+'_v_ph')
+        k_ = C.placeholder(in_dims, name=name+'_k_ph') # -3: sequence axis
+        v_ = C.placeholder(in_dims, name=name+'_v_ph')
         for i in range(num_of_head):
             layers.append(self_attention_layer(in_dims, in_dims, name=name+str(i), as_block=True, k_ph=k_ph, v_ph=v_ph))
         for layer in layers:
@@ -146,7 +146,7 @@ def positional_encoding(position, d_model):
 
 
 if __name__ == '__main__':
-    IN_DIMS = 4 # size of tokens
+    TOKEN_DIMS = 4 # size of tokens (# of embedding)
     SA_DIMS = 3 # size of self attention
     HEAD_DIMS = 8 # size of multi-headed self attention
     HIDDEN_DIMS = 24
@@ -155,18 +155,18 @@ if __name__ == '__main__':
     import numpy as np
 
     v = np.array([ [1,0,0,0], [1,1,1,1], [0,1,0,0] ], np.float32) # seq
-    X = C.sequence.input_variable(IN_DIMS, name='encoder_input')
-    sa_layer = self_attention_layer(IN_DIMS, SA_DIMS)
+    X = C.sequence.input_variable(TOKEN_DIMS, name='encoder_input', sequence_axis=C.Axis('encoder_seq'))
+    sa_layer = self_attention_layer(TOKEN_DIMS, SA_DIMS)
 
     model = sa_layer(X)
     print(model.eval({model.arguments[0]:v}))
 
-    mhsa_layer = multi_headed_self_attention_layer(IN_DIMS, SA_DIMS, HEAD_DIMS, as_block=False)
+    mhsa_layer = multi_headed_self_attention_layer(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, as_block=False)
     model = mhsa_layer(X)
     print(model.eval({model.arguments[0]:v}))
 
 
-    ff_layer = feed_forward_layer(IN_DIMS, HIDDEN_DIMS)
+    ff_layer = feed_forward_layer(TOKEN_DIMS, HIDDEN_DIMS)
 
 
     sa = layer_normalization(X + mhsa_layer(X))
@@ -175,39 +175,59 @@ if __name__ == '__main__':
     model = ff
     print(model.eval({model.arguments[0]:v}))
 
-    en_layer = encoder(IN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, as_block=False)
+    en_layer = encoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, as_block=False)
 
     model = en_layer(X)
     print(model.eval({model.arguments[0]:v}))
 
 #################################################
 
+#region seq test
+    q1 = C.sequence.input_variable(1)
+    q2 = C.sequence.input_variable(1, sequence_axis=C.Axis('a1'))
+
+    r1 = q1*2
+
+    a1 = np.array(range(5),np.float32).reshape(1,-1,1)
+    a2 = np.array(range(3),np.float32).reshape(1,-1,1)
+
+    u1 = C.sequence.unpack(r1,0,True)
+    u2 = C.sequence.unpack(q2,0,True)
+
+    print('===========================================')
+    print(C.sequence.last(r1).eval({q1:a1}))
+    print(u1.eval({q1:a1}))
+    print(u2.eval({q2:a2}))
+    print(C.times_transpose(u1,u2).eval({q1:a1, q2:a2}))
+#endregion
+
     encoder = model
 
-    OUT_DIMS = 5
-
     # y = np.array(range(15),np.float32).reshape(3,OUT_DIMS)
-    input_size = v.shape[0]
-    y = np.array(range(OUT_DIMS*input_size),np.float32).reshape(input_size,OUT_DIMS)
-    Y = C.sequence.input_variable(OUT_DIMS, name='decoder_input') # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
+    input_size = 6 #v.shape[0]
+    y = np.array(range(TOKEN_DIMS*input_size),np.float32).reshape(input_size,TOKEN_DIMS)
+    Y = C.sequence.input_variable(TOKEN_DIMS, name='decoder_input', sequence_axis=C.Axis('decoder_seq')) # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
 
-    edal_layer = self_attention_layer(OUT_DIMS, IN_DIMS, k_ph=True, v_ph=True)
+    edal_layer = self_attention_layer(TOKEN_DIMS, TOKEN_DIMS, k_ph=True, v_ph=True)
     m = edal_layer(Y, encoder.output, encoder.output)
+    print(m.eval({X:v.reshape(1,3,4), Y:y.reshape(1,input_size,4)}))
+
+    msedal_layer = multi_headed_self_attention_layer(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, k_ph=True, v_ph=True)
+    m = msedal_layer(Y, encoder.output, encoder.output)
     print(m.eval({X:v, Y:y}))
 
 
+    # #region training test
+    # # a = np.array([ [1,0,1], [0,0,0], [1,1,1]], np.float32) # for self_attention
+    # # answer_for_test = C.sequence.input_variable(OUT_DIMS) # for self_attentio
 
-    #region training test
-    # a = np.array([ [1,0,1], [0,0,0], [1,1,1]], np.float32) # for self_attention
-    # answer_for_test = C.sequence.input_variable(OUT_DIMS) # for self_attentio
+    # answer_for_test = C.sequence.input_variable(TOKEN_DIMS) # else
 
-    answer_for_test = C.sequence.input_variable(IN_DIMS) # else
+    # loss = C.reduce_mean(C.square(model-answer_for_test))
 
-    loss = C.reduce_mean(C.square(model-answer_for_test))
+    # trainer = C.Trainer(model, (loss, None), C.adam(model.parameters, 0.001, 0.001))
+    # # trainer.train_minibatch(dict(zip(loss.arguments,[v,a]))) # for self_attention
+    # print(trainer.train_minibatch(dict(zip(loss.arguments,[v,v]))))
+    # #endregion
 
-    trainer = C.Trainer(model, (loss, None), C.adam(model.parameters, 0.001, 0.001))
-    # trainer.train_minibatch(dict(zip(loss.arguments,[v,a]))) # for self_attention
-    print(trainer.train_minibatch(dict(zip(loss.arguments,[v,v]))))
-    #endregion
-
-    from IPython import embed;embed(header='end')
+    # from IPython import embed;embed(header='end')
