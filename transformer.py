@@ -2,7 +2,7 @@
 # https://nlpinkorean.github.io/illustrated-transformer/
 import cntk as C
 
-def triangular_matrix(mode:int = 1):
+def triangular_matrix_seq(mode:int = 1):
     X = C.placeholder(1)
     ones = C.ones_like(X[0])
     perm_1 = C.layers.Recurrence(C.plus, return_full_state=True)(ones)
@@ -12,12 +12,12 @@ def triangular_matrix(mode:int = 1):
     arr_2 = C.sequence.unpack(perm_2,0,True)
 
     mat = C.times_transpose(arr_1, arr_2)
-    mat_c = perm_1*perm_2
+    mat_c = arr_1*arr_2
 
-    mat_seq = C.to_sequence_like(mat, mat_c)
-    diagonal_seq = mat_seq - mat_c
+    # mat_seq = C.to_sequence_like(mat, mat_c)
+    diagonal_mat = mat - mat_c
 
-    diagonal_mat = C.sequence.unpack(diagonal_seq,0,True)
+    # diagonal_mat = C.sequence.unpack(diagonal_seq,0,True)
 
     final_mat = diagonal_mat
     if mode == 0:
@@ -31,9 +31,10 @@ def triangular_matrix(mode:int = 1):
     elif mode == -2:
         final_mat = C.greater(final_mat, 0)
 
+
     result = C.as_block(final_mat, [(X,X)], 'triangular_matrix')
 
-    return result
+    return C.stop_gradient(result)
 
 def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_block:bool = False, k_ph:bool=False, v_ph:bool=False, mask_opt:bool=False) -> C.Function:
     sq_sa_dims = C.Constant(C.sqrt(out_dims).eval(), name='sq_dims')
@@ -59,8 +60,9 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
     scaled = scores/sq_sa_dims # div_k
 
     if mask_opt:
-        mask = triangular_matrix(2)(X)
-        scaled = mask * scaled
+        mask = triangular_matrix_seq(2)(X)
+        inf_mask = -np.inf*(mask-0.5)
+        scaled = C.element_min(scaled, inf_mask)
 
     softmax = C.softmax(scaled, name=name+'_softmax')
     softmax_value = C.times(softmax, v_, name=name+'_softmax_value')
