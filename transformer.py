@@ -127,10 +127,10 @@ def layer_normalization(inputs:C.Function, name='layer_normalization') -> C.Func
 def feed_forward_layer(in_dims:int, hidden_dims:int, name='feed_forward', as_block:bool = False) -> C.Function:
     X = C.placeholder(in_dims, (C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()), name=name+'_ph')
 
-    ff = C.layers.Dense(hidden_dims, C.relu, name=name+'_l1')(X)
+    ff = X
+    ff = C.layers.Dense(hidden_dims, C.relu, name=name+'_l1')(ff)
     ff = C.layers.Dense(in_dims, name=name+'_l2')(ff)
 
-    # result = C.reshape(ff, in_dims, name=name+'_result')
     result = ff
 
     if as_block:
@@ -261,8 +261,6 @@ if __name__ == '__main__':
 #endregion
 
 #region transformer test
-
-#endregion
     # batch, seq, vocab
     v1 = np.ones((1 ,4, VOCAB_DIMS), np.float32)
     v2 = np.ones((1, 6, VOCAB_DIMS), np.float32)
@@ -277,3 +275,4 @@ if __name__ == '__main__':
     loss = C.sequence.reduce_sum(C.cross_entropy_with_softmax(TRANSFORMER,A))
     trainer = C.Trainer(TRANSFORMER, (loss, None), C.adam(TRANSFORMER.parameters, 0.001, 0.001))
     print(trainer.train_minibatch(dict(zip(loss.arguments,[v2,v1,p1,v2]))))
+#endregion
