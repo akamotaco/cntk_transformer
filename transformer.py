@@ -182,7 +182,7 @@ def get_angles(pos, i, d_model):
 def positional_encoding(position, d_model):
   angle_rads = get_angles(np.arange(position)[:, np.newaxis],
                           np.arange(d_model)[np.newaxis, :],
-                          d_model)
+                          d_model).astype(np.float32)
   
   # apply sin to even indices in the array; 2i
   angle_rads[:, 0::2] = np.sin(angle_rads[:, 0::2])
@@ -245,7 +245,10 @@ if __name__ == '__main__':
 #region transformer model
     V = C.sequence.input_variable(VOCAB_DIMS, name='vocab_input')
     E = C.layers.Embedding(TOKEN_DIMS)
-    EN = E(V)
+
+    P = C.sequence.input_variable(TOKEN_DIMS, name='positional_encoding')
+
+    EN = E(V) + P
     LAYERS = 6
     for _ in range(LAYERS):
         EN = encoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, as_block=True)(EN)
@@ -264,10 +267,13 @@ if __name__ == '__main__':
     v1 = np.ones((1 ,4, VOCAB_DIMS), np.float32)
     v2 = np.ones((1, 6, VOCAB_DIMS), np.float32)
 
-    TRANSFORMER.eval({V:v1,T:v2})
+    # 1, input_seq, token
+    p1 = positional_encoding(v1.shape[1], TOKEN_DIMS)
+
+    TRANSFORMER.eval({V:v1,T:v2,P:p1})
 
     A = C.sequence.input_variable(VOCAB_DIMS, name='answer', sequence_axis=C.Axis('decoder_seq'))
 
     loss = C.sequence.reduce_sum(C.cross_entropy_with_softmax(TRANSFORMER,A))
     trainer = C.Trainer(TRANSFORMER, (loss, None), C.adam(TRANSFORMER.parameters, 0.001, 0.001))
-    print(trainer.train_minibatch(dict(zip(loss.arguments,[v2,v1,v2]))))
+    print(trainer.train_minibatch(dict(zip(loss.arguments,[v2,v1,p1,v2]))))
