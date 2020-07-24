@@ -1,5 +1,6 @@
 # http://jalammar.github.io/illustrated-transformer/
 # https://nlpinkorean.github.io/illustrated-transformer/
+import numpy as np
 import cntk as C
 
 def triangular_matrix_seq(mode:int = 1):
@@ -14,10 +15,7 @@ def triangular_matrix_seq(mode:int = 1):
     mat = C.times_transpose(arr_1, arr_2)
     mat_c = arr_1*arr_2
 
-    # mat_seq = C.to_sequence_like(mat, mat_c)
     diagonal_mat = mat - mat_c
-
-    # diagonal_mat = C.sequence.unpack(diagonal_seq,0,True)
 
     final_mat = diagonal_mat
     if mode == 0:
@@ -30,7 +28,6 @@ def triangular_matrix_seq(mode:int = 1):
         final_mat = C.greater_equal(final_mat, 0)
     elif mode == -2:
         final_mat = C.greater(final_mat, 0)
-
 
     result = C.as_block(final_mat, [(X,X)], 'triangular_matrix')
 
@@ -202,157 +199,75 @@ def positional_encoding(position, d_model):
 
 
 if __name__ == '__main__':
+    VOCAB_DIMS = 100 # size of vocabulary
     TOKEN_DIMS = 4 # size of tokens (# of embedding)
     SA_DIMS = 3 # size of self attention
     HEAD_DIMS = 8 # size of multi-headed self attention
-    HIDDEN_DIMS = 24
-
-    import numpy as np
+    HIDDEN_DIMS = 24 # feed forward layer hidden
 
     v = np.array([ [1,0,0,0], [1,1,1,1], [0,1,0,0] ], np.float32) # seq
     X = C.sequence.input_variable(TOKEN_DIMS, name='encoder_input', sequence_axis=C.Axis('encoder_seq'))
-    sa_layer = self_attention_layer(TOKEN_DIMS, SA_DIMS)
 
-    model = sa_layer(X)
-    print(model.eval({model.arguments[0]:v}))
-
-    mhsa_layer = multi_headed_self_attention_layer(TOKEN_DIMS, SA_DIMS, HEAD_DIMS)
-    model = mhsa_layer(X)
-    print(model.eval({model.arguments[0]:v}))
-
-
-    ff_layer = feed_forward_layer(TOKEN_DIMS, HIDDEN_DIMS)
-
-
-    sa = layer_normalization(X + mhsa_layer(X))
-    ff = layer_normalization(sa + ff_layer(sa))
-
-    model = ff
-    print(model.eval({model.arguments[0]:v}))
-
-    en_layer = encoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, as_block=False)
-
-    model = en_layer(X)
-    print(model.eval({model.arguments[0]:v}))
-
-#################################################
-
-#region seq test
-    q1 = C.sequence.input_variable(1)
-    q2 = C.sequence.input_variable(1, sequence_axis=C.Axis('a1'))
-
-    r1 = q1*2
-
-    a1 = np.array(range(5),np.float32).reshape(1,-1,1)
-    a2 = np.array(range(3),np.float32).reshape(1,-1,1)
-
-    u1 = C.sequence.unpack(r1,0,True)
-    u2 = C.sequence.unpack(q2,0,True)
-
-    print('===========================================')
-    print(C.sequence.last(r1).eval({q1:a1}))
-    print(u1.eval({q1:a1}))
-    print(u2.eval({q2:a2}))
-    print(C.times_transpose(u1,u2).eval({q1:a1, q2:a2}))
+#region encoder model
+    encoder_model = encoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, as_block=False)(X)
+    print(encoder_model.eval({encoder_model.arguments[0]:v}))
 #endregion
 
-    encoder = model
-
-    # y = np.array(range(15),np.float32).reshape(3,OUT_DIMS)
-    input_size = 6 #v.shape[0]
+#region encoder-decoder model
+    input_size = 6
     y = np.array(range(TOKEN_DIMS*input_size),np.float32).reshape(input_size,TOKEN_DIMS)
     Y = C.sequence.input_variable(TOKEN_DIMS, name='decoder_input', sequence_axis=C.Axis('decoder_seq')) # encoder 차원과 decoer의 차원의 개수는 항상 일치해야 하는가?
 
-    edal_layer = self_attention_layer(TOKEN_DIMS, TOKEN_DIMS, k_ph=True, v_ph=True, as_block=True)
-    m = edal_layer(Y, encoder.output, encoder.output)
-    print(m.eval({X:v.reshape(1,3,4), Y:y.reshape(1,input_size,4)}))
+    decoder_layer = decoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, encoder, as_block=False)
+    decoder_model = decoder_layer(Y, encoder_model.output, encoder_model.output)
+    print(decoder_model.eval({X:v, Y:y}))
+#endregion
 
-    msedal_layer = multi_headed_self_attention_layer(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, k_ph=True, v_ph=True, as_block=True)
-    m = msedal_layer(Y, encoder.output, encoder.output)
-    print(m.eval({X:v, Y:y}))
-
-
-
-
-    de_layer = decoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, encoder, as_block=False)
-    model = de_layer(Y, encoder, encoder)
-    print(model.eval({X:v, Y:y}))
-    decoder = model
-
-
-    #region training test
-    # a = np.array([ [1,0,1], [0,0,0], [1,1,1]], np.float32) # for self_attention
-    # answer_for_test = C.sequence.input_variable(OUT_DIMS) # for self_attentio
-
+#region encoder test
     answer_for_test = C.sequence.input_variable(TOKEN_DIMS, sequence_axis=C.Axis('encoder_seq')) # else
 
-    loss = C.reduce_mean(C.square(encoder-answer_for_test))
+    loss = C.reduce_mean(C.square(encoder_model-answer_for_test))
 
-    trainer = C.Trainer(encoder, (loss, None), C.adam(encoder.parameters, 0.001, 0.001))
+    trainer = C.Trainer(encoder_model, (loss, None), C.adam(encoder_model.parameters, 0.001, 0.001))
     print(trainer.train_minibatch(dict(zip(loss.arguments,[v,v]))))
-    #endregion
+#endregion
 
 
+#region decoder test
     answer_for_test = C.sequence.input_variable(TOKEN_DIMS, sequence_axis=C.Axis('decoder_seq'))
 
-    loss = C.reduce_mean(C.square(decoder-answer_for_test))
+    loss = C.reduce_mean(C.square(decoder_model-answer_for_test))
 
-    trainer = C.Trainer(decoder, (loss, None), C.adam(decoder.parameters, 0.001, 0.001))
+    trainer = C.Trainer(decoder_model, (loss, None), C.adam(decoder_model.parameters, 0.001, 0.001))
     print(trainer.train_minibatch(dict(zip(loss.arguments,[y,v,y]))))
-
-#region seq-mask test
-    q1 = C.sequence.input_variable(5)
-    a1 = np.array(range(4*5),np.float32).reshape(1,-1,5)
-    r1 = q1*2
-    print('================================')
-    print(r1.eval({q1:a1}))
-    print(C.sequence.is_first(r1).eval({q1:a1}))
-    print(C.layers.Fold(C.plus)(r1).eval({q1:a1}))
 #endregion
 
-#region suq-mask test2
-    x = [[[0],[0],[0]],
-         [[0],[0],[0],[0],[0]]]
-    @C.Function
-    def double_up(s):
-        return s*2
-    r1 = C.layers.UnfoldFrom(double_up)(C.Constant(1), C.sequence.input_variable(1))
-    r2 = C.layers.UnfoldFrom(lambda x: x*2)(C.Constant(1), C.sequence.input_variable(1))
-    print(r1.eval({r1.arguments[0]:x}))
-    print(r2.eval({r2.arguments[0]:x}))
+#region transformer model
+    V = C.sequence.input_variable(VOCAB_DIMS, name='vocab_input')
+    E = C.layers.Embedding(TOKEN_DIMS)
+    EN = E(V)
+    LAYERS = 6
+    for _ in range(LAYERS):
+        EN = encoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, as_block=True)(EN)
+
+    T = C.sequence.input_variable(VOCAB_DIMS, name='decoder_input', sequence_axis=C.Axis('decoder_seq'))
+    DE = E(T)
+    for _ in range(LAYERS):
+        DE = decoder(TOKEN_DIMS, SA_DIMS, HEAD_DIMS, HIDDEN_DIMS, encoder, as_block=True)(DE, EN, EN)
+    TRANSFORMER = C.softmax(C.layers.Dense(VOCAB_DIMS)(DE))
 #endregion
 
-    from IPython import embed;embed(header='end')
+#region transformer test
 
+#endregion
+    # batch, seq, vocab
+    v1 = np.ones((1 ,4, VOCAB_DIMS), np.float32)
+    v2 = np.ones((1, 6, VOCAB_DIMS), np.float32)
 
+    TRANSFORMER.eval({V:v1,T:v2})
 
+    A = C.sequence.input_variable(VOCAB_DIMS, name='answer', sequence_axis=C.Axis('decoder_seq'))
 
-# z = np.arange(5*5).reshape(5,5)
-
-# q = C.sequence.input_variable(5)
-# w = C.ones_like(q[0])
-
-# e = C.layers.Recurrence(C.plus, return_full_state=True)(w)
-# e_ = C.layers.Recurrence(C.plus, go_backwards=True, return_full_state=True)(w)
-
-# r = C.sequence.unpack(e,0,True)
-# r_ = C.sequence.unpack(e_,0,True)
-
-# R = C.times_transpose(r,r_)
-# R_c = e*e_
-
-# R_seq = C.to_sequence_like(R,R_c)
-# R_mat = R_seq - R_c
-
-# M = C.reduce_max(R)
-
-# mat = (R-1)/(M-1)
-
-
-# mat3 = C.to_sequence(mat)
-
-# mat2 = C.greater_equal(mat, C.Constant(1.0/3+1e-5))
-
-
-# m = w
-# m.eval({q:z})
+    loss = C.sequence.reduce_sum(C.cross_entropy_with_softmax(TRANSFORMER,A))
+    trainer = C.Trainer(TRANSFORMER, (loss, None), C.adam(TRANSFORMER.parameters, 0.001, 0.001))
+    print(trainer.train_minibatch(dict(zip(loss.arguments,[v2,v1,v2]))))
