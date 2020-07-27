@@ -59,6 +59,7 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
     if mask_opt:
         mask = triangular_matrix_seq(2)(X)
         inf_mask = -np.inf*(mask-0.5)
+        inf_mask = C.as_block(inf_mask,[(X,X)],'mask','mask')
         scaled = C.element_min(scaled, inf_mask)
 
     softmax = C.softmax(scaled, name=name+'_softmax')
@@ -119,6 +120,12 @@ def layer_normalization(inputs:C.Function, name='layer_normalization') -> C.Func
     sigma = C.sqrt(C.reduce_mean(C.square(X-mu)), name='sigma')
 
     result = (X-mu)/sigma
+
+#region scale + bias
+    scale = C.parameter(inputs.shape, init=1, name='scale')
+    bias = C.parameter(inputs.shape, init=0, name='bias')
+    result = result*scale + bias
+#endregion
 
     block = C.as_block(result, [(X,X)], name)
 
