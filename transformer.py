@@ -62,9 +62,9 @@ def self_attention_layer(in_dims:int, out_dims:int, name='self_attention', as_bl
         scaled = C.element_min(scaled, inf_mask)
 
     softmax = C.softmax(scaled, name=name+'_softmax')
-    softmax_value = C.times(softmax, v_, name=name+'_softmax_value')
+    attention = C.times(softmax, v_, name=name+'_attention')
 
-    result = C.to_sequence_like(softmax_value, X)
+    result = C.to_sequence_like(attention, X)
     
     if as_block:
         if k_ph is False and v_ph is False:

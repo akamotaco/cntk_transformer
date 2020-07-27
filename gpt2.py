@@ -1,7 +1,7 @@
 # http://jalammar.github.io/illustrated-gpt2/
 import cntk as C
 import numpy as np
-from transformer import layer_normalization
+from transformer import layer_normalization, triangular_matrix_seq
 
 def positional_encoding(token_dims:int, discount_factor:float=0.99):
     X = C.placeholder(token_dims, name='positional_encoding')
@@ -66,17 +66,27 @@ def gpt2_self_attention(token_dims:int, head_dims:int, mask_opt:bool = False, as
         v = v_heads[i]
 
 #region score
-        q_ = C.sequence.last(q, name='last_q'+str(i)) # q present
+        # q_ = C.sequence.last(q, name='last_q'+str(i)) # q present
+        q_ = C.sequence.unpack(q, 0, True, name='seq_q'+str(i)) # q seq
         k_ = C.sequence.unpack(k, 0, True, name='seq_k'+str(i)) # k seq
         v_ = C.sequence.unpack(v, 0, True, name='seq_v'+str(i)) # v seq
 
         scores = C.times_transpose(q_, k_)
-        softmax = C.softmax(scores)
+        scaled = scores * (1/C.sqrt(v_.shape[-1]))
+
+#region mask opt
+        mask = triangular_matrix_seq(2)(X)
+        inf_mask = -np.inf*(mask-0.5)
+        scaled = C.element_min(scaled, inf_mask)
+#endregion        
+
+        softmax = C.softmax(scaled)
 #endregion
 #region sum
         attention = C.times(softmax, v_)
+        attention_seq = C.to_sequence_like(attention, X)
 #endregion
-        attention_head.append(attention)
+        attention_head.append(attention_seq)
 
 #region merge attention heads
     attention = C.splice(*attention_head, name='merged_attention')
@@ -91,14 +101,39 @@ def gpt2_self_attention(token_dims:int, head_dims:int, mask_opt:bool = False, as
 
     return project
 
-def gpt2_block(token_dims:int, head_dims:int, name:str='gpt2_block'):
+def feed_forward_layer(hidden_dims:int, out_dims:int, as_block:bool = False, name:str='ff_layer'):
+    X = C.placeholder(out_dims, dynamic_axes=(C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()) ,name=name)
+
+    ff = C.layers.Dense(hidden_dims,activation=C.elu)(X)
+    ff = C.layers.Dense(out_dims)(ff)
+    result = ff
+
+    if as_block:
+        return C.as_block(result, [(X,X)], 'feed_forward_network', 'feed_forward_network')
+
+    return result
+
+    
+
+
+def gpt2_block(token_dims:int, head_dims:int, as_block:bool = False, name:str='gpt2_block'):
     X = C.placeholder(token_dims, dynamic_axes=(C.Axis.default_batch_axis(), C.Axis.default_dynamic_axis()) ,name=name)
 
     sa_layer = gpt2_self_attention(token_dims, head_dims)
-    attention = sa_layer(layer_normalization(X))
+    ff_layer = feed_forward_layer(4*token_dims, token_dims)
 
-    from IPython import embed;embed()
-    exit()
+    sa = sa_layer(layer_normalization(X))
+    sa = X + sa
+    ff = ff_layer(sa)
+    ff = X + ff
+
+    result = ff
+
+    if as_block:
+        return C.as_block(result, [(X,X)], 'gpt2_block','gpt2_block')
+    
+    return result
+
 
 if __name__ == '__main__':
     VOCAB_DIMS = 100
@@ -126,5 +161,6 @@ if __name__ == '__main__':
 
     # sa_layer = gpt2_self_attention(TOKENS_DIMS, HEAD_DIMS)
     block_layer = gpt2_block(TOKENS_DIMS, HEAD_DIMS)
+    block = block_layer(E)
 
     from IPython import embed;embed()
